@@ -21,7 +21,7 @@
 #include "tim.h"
 
 /* USER CODE BEGIN 0 */
-
+#include "os_task.h"
 /* USER CODE END 0 */
 
 TIM_HandleTypeDef htim1;
@@ -108,7 +108,9 @@ void MX_TIM3_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM3_Init 2 */
-
+  /* TIM3 用作调度器时基：CubeMX 中 Period 应配置为 1000-1（1ms），
+     此处显式改写，保证与 OS_TICK_PERIOD_MS 始终一致 */
+  __HAL_TIM_SET_AUTORELOAD(&htim3, (1000u / OS_TICK_PERIOD_MS) - 1u);
   /* USER CODE END TIM3_Init 2 */
 
 }

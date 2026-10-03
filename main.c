@@ -27,10 +27,10 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "encoder.h"
-#include "delay.h"
 #include "imu.h"
 #include "ops9_control.h"
 #include "robot_com.h"
+#include "os_task.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -40,8 +40,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define LED_DELAY		1000		//ms
-#define TASK_TIME_OUT	1
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -52,15 +51,13 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-uint16_t led_delay;
-uint8_t get_yaw_state;
-uint8_t ops9_dirt;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-static void LED_task(uint32_t delay);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -105,35 +102,28 @@ int main(void)
   MX_TIM4_Init();
   MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
-  delay_init();
   Encoder_init();
-  IMU_init();
   Robot_com_init();
-  Control_init(TASK_TIME_OUT);
+  IMU_init();
+  Control_init(ODOM_PERIOD_S);
+
+  /* 初始化简易调度器并注册周期任务（周期单位：tick = 1ms） */
+  OS_TaskInit();
+  OS_CreatTask(OS_TASK_ODOM,       Odom_Task,       ODOM_PERIOD_TICKS,   OS_SLEEP);
+  OS_CreatTask(OS_TASK_REPORT,     Report_Task,     REPORT_PERIOD_TICKS, OS_SLEEP);
+  OS_CreatTask(OS_TASK_BACKGROUND, Background_Task, BG_PERIOD_TICKS,     OS_SLEEP);
+
+  OS_TickStart();   // 启动 TIM3 作为 1ms 调度时基
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-	LED_task(LED_DELAY);
-	Encoder_task();
-	Robot_com_send_data();
-	Control_task(ops9_dirt);
-	IMU_check_task();
-	delay_ms(TASK_TIME_OUT);
-	switch(get_ops_cmd_data())
-	{
-		case 0x22:
-			NVIC_SystemReset();
-			break;
-		default:
-			ops9_dirt = get_ops_cmd_data()-0x30;
-			
-	}
+  OS_Start();       // 前台调度主循环（永不返回）
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+  while (1)
+  {
   }
   /* USER CODE END 3 */
 }
@@ -178,14 +168,16 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-void LED_task(uint32_t delay)
+
+/**
+  * @brief TIM3 周期溢出回调：推进调度器 tick（1ms）
+  * @note  中断内只置标志，业务处理全部放在前台任务中执行
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-	static uint32_t led_delay =0;
-	led_delay ++;
-	if(led_delay >= delay)
+	if(htim->Instance == TIM3)
 	{
-		HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-		led_delay =0;
+		OS_ClockInterruptHandle();
 	}
 }
 
@@ -194,6 +186,11 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 	if(huart->Instance == USART2)
 	{
 		Robot_com_call_back();
+	}
+	else if(huart->Instance == USART3)
+	{
+		/* 环形 DMA 每写满一圈触发一次 TC（DMA 本身不会停止），仅用于绕圈计数诊断 */
+		IMU_dma_wrap_callback();
 	}
 }
 
